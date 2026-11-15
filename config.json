@@ -1,0 +1,7 @@
+{
+  "Enabled": true,
+  "MinPlayerDistance": 300.0,
+  "AvoidLastSpawn": true,
+  "MaxSpawnAttempts": 20,
+  "AdminPermission": "@css/admin"
+}
