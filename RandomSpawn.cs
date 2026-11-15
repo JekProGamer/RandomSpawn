@@ -69,6 +69,7 @@ public sealed class RandomSpawn : BasePlugin
     private void LoadMapSpawns()
     {
         Directory.CreateDirectory(SpawnDirectory);
+        _loadedMap = CurrentMap;
         if (!File.Exists(CurrentMapFile))
         {
             SaveMapSpawns();
@@ -189,8 +190,18 @@ public sealed class RandomSpawn : BasePlugin
         player!.PrintToChat($"{ChatColors.Green}[RandomSpawn] {ChatColors.White}Точки карты сохранены. Всего: {ChatColors.Gold}{_mapSpawns.Spawns.Count}");
     }
 
+    private string _loadedMap = string.Empty;
+
     private HookResult OnPlayerSpawn(EventPlayerSpawn gameEvent, GameEventInfo info)
     {
+        // Map changes do not reload the plugin, so switch to that map's own point file.
+        if (!string.Equals(_loadedMap, CurrentMap, StringComparison.OrdinalIgnoreCase))
+        {
+            LoadMapSpawns();
+            _loadedMap = CurrentMap;
+            _lastSpawnBySteamId.Clear();
+        }
+
         var player = gameEvent.Userid;
         if (!_config.Enabled || player == null || !player.IsValid || _mapSpawns.Spawns.Count == 0)
             return HookResult.Continue;
