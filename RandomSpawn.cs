@@ -89,16 +89,24 @@ public sealed class RandomSpawn : BasePlugin
         }
 
         Directory.CreateDirectory(SpawnDirectory);
+
+        // Clear the in-memory list before loading another map so points
+        // from the previous map can never be copied into this map's file.
         _loadedMap = mapName;
-        if (!File.Exists(CurrentMapFile))
+        _mapSpawns = new MapSpawnData();
+        _lastSpawnBySteamId.Clear();
+
+        var mapFile = Path.Combine(SpawnDirectory, $"{SafeMapName(mapName)}.json");
+        if (!File.Exists(mapFile))
         {
-            SaveMapSpawns();
+            File.WriteAllText(mapFile, JsonSerializer.Serialize(_mapSpawns, JsonOptions()));
+            Logger.LogInformation("No custom spawn points configured for {MapName}; native CS2 map spawns will be used.", mapName);
             return;
         }
 
         try
         {
-            var data = JsonSerializer.Deserialize<MapSpawnData>(File.ReadAllText(CurrentMapFile), JsonOptions());
+            var data = JsonSerializer.Deserialize<MapSpawnData>(File.ReadAllText(mapFile), JsonOptions());
             _mapSpawns = data ?? new MapSpawnData();
             _mapSpawns.Spawns ??= new List<SpawnPoint>();
         }
@@ -239,8 +247,15 @@ public sealed class RandomSpawn : BasePlugin
                 return;
 
             var pawn = player.PlayerPawn.Value;
-            if (pawn == null || !pawn.IsValid || _mapSpawns.Spawns.Count == 0)
+            if (pawn == null || !pawn.IsValid)
                 return;
+
+            // If this map has no custom points, keep the native spawn chosen by CS2.
+            if (_mapSpawns.Spawns.Count == 0)
+            {
+                Logger.LogDebug("No custom spawn points for {MapName}; leaving player at the native map spawn.", _loadedMap);
+                return;
+            }
 
             var chosenIndex = ChooseSpawn(player);
             if (chosenIndex < 0 || chosenIndex >= _mapSpawns.Spawns.Count)
