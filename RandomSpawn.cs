@@ -19,7 +19,7 @@ public sealed class RandomSpawn : BasePlugin
     private const string AdminPermission = "@css/admin";
     private readonly Random _random = new();
     private SpawnConfig _config = new();
-    private string CurrentMap => Server.MapName;
+    private string CurrentMap => Server.MapName ?? string.Empty;
     private string SpawnDirectory => Path.Combine(ModuleDirectory, "spawns");
     private string CurrentMapFile => Path.Combine(SpawnDirectory, $"{SafeMapName(CurrentMap)}.json");
 
@@ -28,7 +28,6 @@ public sealed class RandomSpawn : BasePlugin
     public override void Load(bool hotReload)
     {
         LoadConfig();
-        LoadMapSpawns();
 
         AddCommand("css_spawnset", "Add a spawn point at your current position", CommandSpawnSet);
         AddCommand("css_spawnundo", "Remove the last spawn point on this map", CommandSpawnUndo);
@@ -37,7 +36,7 @@ public sealed class RandomSpawn : BasePlugin
         AddCommand("css_spawnsave", "Save spawn points for this map", CommandSpawnSave);
 
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn, HookMode.Post);
-        Logger.LogInformation("RandomSpawn v{Version} loaded for map {MapName}", ModuleVersion, CurrentMap);
+        Logger.LogInformation("RandomSpawn v{Version} loaded. Map-specific spawn data will load when the server map is available.", ModuleVersion);
     }
 
     public override void Unload(bool hotReload)
@@ -67,10 +66,30 @@ public sealed class RandomSpawn : BasePlugin
         }
     }
 
+    private bool EnsureCurrentMapLoaded()
+    {
+        var mapName = CurrentMap;
+        if (string.IsNullOrWhiteSpace(mapName))
+            return false;
+
+        if (string.Equals(_loadedMap, mapName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        LoadMapSpawns();
+        return string.Equals(_loadedMap, mapName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void LoadMapSpawns()
     {
+        var mapName = CurrentMap;
+        if (string.IsNullOrWhiteSpace(mapName))
+        {
+            Logger.LogWarning("Cannot load map spawns yet: Server.MapName is not available.");
+            return;
+        }
+
         Directory.CreateDirectory(SpawnDirectory);
-        _loadedMap = CurrentMap;
+        _loadedMap = mapName;
         if (!File.Exists(CurrentMapFile))
         {
             SaveMapSpawns();
@@ -96,12 +115,18 @@ public sealed class RandomSpawn : BasePlugin
 
     private void SaveMapSpawns()
     {
+        if (!EnsureCurrentMapLoaded())
+            throw new InvalidOperationException("The current map name is not available; spawn points were not saved.");
+
         Directory.CreateDirectory(SpawnDirectory);
         File.WriteAllText(CurrentMapFile, JsonSerializer.Serialize(_mapSpawns, JsonOptions()));
     }
 
-    private static string SafeMapName(string mapName)
+    private static string SafeMapName(string? mapName)
     {
+        if (string.IsNullOrWhiteSpace(mapName))
+            return "unknown_map";
+
         var safe = string.Concat(mapName.Where(c => char.IsLetterOrDigit(c) || c == '_' || c == '-'));
         return string.IsNullOrWhiteSpace(safe) ? "unknown_map" : safe;
     }
@@ -120,7 +145,13 @@ public sealed class RandomSpawn : BasePlugin
             return false;
 
         if (IsAdmin(player))
-            return true;
+        {
+            if (EnsureCurrentMapLoaded())
+                return true;
+
+            player.PrintToChat($"{ChatColors.Red}[RandomSpawn] {ChatColors.White}Название карты ещё не доступно. Попробуй команду через секунду.");
+            return false;
+        }
 
         player.PrintToChat($"{ChatColors.Red}[RandomSpawn] {ChatColors.White}У тебя нет доступа к этой команде.");
         return false;
@@ -195,13 +226,9 @@ public sealed class RandomSpawn : BasePlugin
 
     private HookResult OnPlayerSpawn(EventPlayerSpawn gameEvent, GameEventInfo info)
     {
-        // Map changes do not reload the plugin, so switch to that map's own point file.
-        if (!string.Equals(_loadedMap, CurrentMap, StringComparison.OrdinalIgnoreCase))
-        {
-            LoadMapSpawns();
-            _loadedMap = CurrentMap;
-            _lastSpawnBySteamId.Clear();
-        }
+        // Load the correct map file only after the engine has initialized Server.MapName.
+        if (!EnsureCurrentMapLoaded())
+            return HookResult.Continue;
 
         var player = gameEvent.Userid;
         if (!_config.Enabled || player == null || !player.IsValid || _mapSpawns.Spawns.Count == 0)
