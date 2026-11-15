@@ -226,34 +226,47 @@ public sealed class RandomSpawn : BasePlugin
 
     private HookResult OnPlayerSpawn(EventPlayerSpawn gameEvent, GameEventInfo info)
     {
-        // Load the correct map file only after the engine has initialized Server.MapName.
-        if (!EnsureCurrentMapLoaded())
-            return HookResult.Continue;
-
         var player = gameEvent.Userid;
-        if (!_config.Enabled || player == null || !player.IsValid || _mapSpawns.Spawns.Count == 0)
+        if (!_config.Enabled || player == null || !player.IsValid)
             return HookResult.Continue;
 
-        var pawn = player.PlayerPawn.Value;
-        if (pawn == null || !pawn.IsValid)
-            return HookResult.Continue;
-
-        var chosenIndex = ChooseSpawn(player);
-        if (chosenIndex < 0)
-            return HookResult.Continue;
-
-        var point = _mapSpawns.Spawns[chosenIndex];
-        _lastSpawnBySteamId[player.SteamID] = chosenIndex;
-
+        // Spawn events can fire while the server is still switching maps.
+        // Resolve the map and choose its spawn point inside the deferred callback,
+        // not before the map transition has completed.
         Server.NextFrame(() =>
         {
-            if (!player.IsValid || player.PlayerPawn.Value == null || !player.PlayerPawn.Value.IsValid)
+            if (!player.IsValid || !EnsureCurrentMapLoaded())
                 return;
 
-            player.PlayerPawn.Value.Teleport(
-                new Vector(point.X, point.Y, point.Z),
-                new QAngle(point.Pitch, point.Yaw, point.Roll),
-                new Vector(0, 0, 0));
+            var pawn = player.PlayerPawn.Value;
+            if (pawn == null || !pawn.IsValid || _mapSpawns.Spawns.Count == 0)
+                return;
+
+            var chosenIndex = ChooseSpawn(player);
+            if (chosenIndex < 0 || chosenIndex >= _mapSpawns.Spawns.Count)
+                return;
+
+            var point = _mapSpawns.Spawns[chosenIndex];
+            _lastSpawnBySteamId[player.SteamID] = chosenIndex;
+
+            // Guard against another map change before applying the teleport.
+            var targetMap = _loadedMap;
+            Server.NextFrame(() =>
+            {
+                if (!player.IsValid ||
+                    !string.Equals(CurrentMap, targetMap, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(_loadedMap, targetMap, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                var currentPawn = player.PlayerPawn.Value;
+                if (currentPawn == null || !currentPawn.IsValid)
+                    return;
+
+                currentPawn.Teleport(
+                    new Vector(point.X, point.Y, point.Z),
+                    new QAngle(point.Pitch, point.Yaw, point.Roll),
+                    new Vector(0, 0, 0));
+            });
         });
 
         return HookResult.Continue;
